@@ -1,0 +1,493 @@
+---
+title: "Homestead vs. Non-Homestead: Unequal Exposure to Tax Foreclosure in Kalamazoo County"
+author: |
+  Gular Abbasli  
+date: "December 2025"
+output: pdf_document
+geometry: margin=1in
+bibliography: Abbasli Gular References.bib
+---
+
+
+## Introduction
+
+Property tax foreclosure is a form of housing loss that occurs when property taxes remain unpaid for multiple years and the local government forecloses on the property. Prior research shows that foreclosures tend to cluster geographically, yet relatively little is known about how property tax foreclosure influences future foreclosure risk. Evidence from Detroit indicates that nearby tax foreclosures increase the likelihood of subsequent foreclosures, suggesting a self-reinforcing process (@vachuska2021property). These findings suggest that foreclosure risk may be related to observable characteristics of properties, which motivates examining which types of parcels are more likely to be foreclosed.
+
+This paper studies the determinants of tax foreclosure in Kalamazoo County using administrative data from the County Treasurer’s Office. The dataset covers more than a decade of forfeiture activity and provides detailed information on each parcel’s ownership status, taxable value, unpaid balances, and signs of financial stress. These characteristics allow us to examine why some parcels move from forfeiture to foreclosure while others successfully redeem.
+
+The main focus of the analysis is on property level predictors of foreclosure. In particular, I study whether non-homestead parcels face higher foreclosure risk than owner occupied parcels, and how financial stress indicators such as unpaid utilities, large forfeited balances, and repeated delinquency shape outcomes. These variables reflect important differences in owners’ financial resources and attachment to the property.
+
+By combining descriptive statistics with linear probability and logistic regression models, this paper aims to provide a clearer picture of which parcels are most vulnerable to foreclosure. Identifying these patterns can support targeted policy responses and help reduce housing instability in Kalamazoo County. The remainder of the paper is organized as follows. Section 2 describes the institutional background and the data. Section 3 presents descriptive statistics. Section 4 introduces the econometric strategy and main results, and Section 5 concludes.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = FALSE,
+  message = FALSE,
+  warning = FALSE
+)
+
+library(tidyverse)
+library(readxl)
+library(janitor)
+library(scales)
+library(knitr)
+library(kableExtra)
+library(broom)
+library(margins)
+library(stringr)
+
+# Read the Excel once
+raw_all <- read_excel("Kalamazoo County - Forfeiture Data (2011 - 2025).xlsx")
+
+# ---------- Exercise 4 object: `data` ----------
+data <- raw_all %>%
+  clean_names() %>%
+  filter(forfeiture_year != 2025) %>%
+  mutate(
+    homestead_status = factor(
+      pre_status_1_homestead_0_non_homestead,
+      levels = c(0, 1),
+      labels = c("Non-homestead", "Homestead")
+    ),
+    homestead_status_label = factor(
+      homestead_status,
+      levels = c("Non-homestead", "Homestead"),
+      labels = c("Non-\nhomestead", "Homestead")
+    )
+  )
+
+# ---------- Exercise 5 object: `kzoo` ----------
+# Rename long "Liens or Unpaid Utilities" column to `liens`
+kzoo_raw <- raw_all %>%
+  rename(liens = matches("Liens or Unpaid Utilities")) %>%
+  clean_names()
+
+kzoo <- kzoo_raw %>%
+  filter(forfeiture_year != 2025) %>%
+  mutate(
+    foreclosure       = foreclosure_1_yes_0_no,
+    non_homestead     = if_else(pre_status_1_homestead_0_non_homestead == 0, 1, 0),
+    taxable_value_10k = taxable_value / 10000,
+    forf_balance_1000 = total_forfeited_balance / 1000,
+    liens             = as.numeric(liens),
+    num_prior         = number_of_prior_forfeitures,
+    year              = factor(forfeiture_year),
+    homestead_status_label = if_else(non_homestead == 1, "Non-homestead", "Homestead")
+  ) %>%
+  filter(
+    !is.na(foreclosure),
+    !is.na(non_homestead),
+    !is.na(taxable_value_10k),
+    !is.na(forf_balance_1000),
+    !is.na(liens),
+    !is.na(num_prior),
+    !is.na(year)
+  )
+```
+
+
+## Description of the Foreclosure Process
+
+The dataset for this assignment is an administrative file from the Kalamazoo County Treasurer’s Office. It contains information on tax delinquent real properties that entered forfeiture in Kalamazoo County between 2011 and 2025. Each row represents one forfeiture event for one parcel in a specific year. In total, the original dataset includes 27,163 forfeiture records across 19 units of local government (cities, townships, and villages). Many parcels appear more than once over time. Using the dummy parcel number (an anonymized parcel ID), there are 9,242 unique parcels and 25,611 forfeitures from 2011 to 2024, which shows that repeated forfeiture is common.
+
+According to the foreclosure timeline from the Treasurer’s Office, property tax foreclosure in Michigan follows a four-year cycle. (@MichiganTaxForeclosureLaw). In year 1, local governments bill property taxes. If the owner does not pay, the taxes become delinquent the next March (year 2). In year 3, if the taxes are still unpaid, the parcel is forfeited to the County Treasurer. Forfeiture does not mean that the owner immediately loses the property. Instead, it starts a one year redemption period when the owner can still pay the full amount. In year 4, if the owner still has not paid by the deadline, the parcel is foreclosed and later sold at auction. In the dataset, the variable forfeiture year corresponds to year 3 of this cycle, while foreclosure happens in year 4.
+
+Because of this timing, I drop all parcels with forfeiture year 2025 from the analysis. Parcels forfeited in 2025 are still in their redemption year and will not reach the foreclosure decision until 2026. As a result, the foreclosure indicator for 2025 forfeitures would almost always be zero in the current data, not because these parcels are safe, but because the foreclosure year has not arrived yet. Keeping 2025 forfeitures would mix incomplete cases with complete ones and would bias the measured foreclosure rate downward. After removing 2025 forfeitures, the working dataset used in this assignment covers 2011–2024 and includes 25,611 forfeiture observations and 9,242 unique parcels, with complete information on whether they were eventually redeemed or foreclosed.
+
+The dataset contains the main outcomes of the process and several characteristics of the parcels. The redemption indicator is a dummy variable that equals one if the owner pays the full delinquent amount during the redemption period, and the redemption date records when this payment occurs. The foreclosure indicator is a dummy variable that equals one if the parcel is foreclosed in the following year, and the foreclosure date shows when foreclosure takes place. In the cleaned sample (2011–2024), about 85 percent of forfeitures are eventually redeemed and about 7 percent end in foreclosure.
+
+The dataset also includes information on prior history, such as the number of previous forfeitures and the number of extensions granted to the owner. The homestead status variable indicates whether the parcel is an owner occupied home, and the property class variable indicates whether the parcel contains a structure or is a vacant lot. In the sample, about 45 percent of forfeited parcels are homestead properties, and about 89 percent involve structures rather than vacant land. Other fields, such as the descriptive property classification, the taxable value of the parcel, the total amount of unpaid taxes at forfeiture, additional penalty amounts, and indicators for liens, unpaid utilities, or nearby prior year foreclosures help us understand which types of properties are more likely to move through the tax foreclosure process.
+
+## Differences Between Homestead and Non-Homestead Parcels
+
+```{r table1_long, results='asis'}
+# Table 1 – overall summary
+t1_raw <- data %>%
+  summarise(
+    `Foreclosure rate (%)`         = mean(foreclosure_1_yes_0_no, na.rm = TRUE) * 100,
+    `Redemption rate (%)`          = mean(redemption_1_yes_0_no, na.rm = TRUE) * 100,
+    `Mean taxable value ($)`       = mean(taxable_value, na.rm = TRUE),
+    `Mean forfeited balance ($)`   = mean(total_forfeited_balance, na.rm = TRUE),
+    `Percent homestead (%)`        = mean(pre_status_1_homestead_0_non_homestead, na.rm = TRUE) * 100,
+    `Percent unpaid utilities (%)` =
+      mean(
+        liens_or_unpaid_utilities_1_has_liens_unpaid_utilities_0_does_not_have_liens_unpaid_utilities,
+        na.rm = TRUE
+      ) * 100
+  )
+
+table1 <- t1_raw %>%
+  pivot_longer(
+    cols      = everything(),
+    names_to  = "Measure",
+    values_to = "Value"
+  ) %>%
+  mutate(
+    Value = case_when(
+      str_detect(Measure, "%") ~ round(Value, 1),
+      TRUE                     ~ round(Value, 0)
+    )
+  )
+
+kable(
+  table1,
+  caption  = "Summary statistics for forfeited parcels, 2011–2024",
+  booktabs = TRUE,
+  align    = c("l","r")
+) %>%
+  kable_styling(
+    full_width    = FALSE,
+    position      = "center",
+    font_size     = 9,
+    latex_options = c("hold_position")
+  )
+```
+
+```{r table2, results='asis'}
+# Table 2 – homestead vs non-homestead with status in columns
+t2_raw <- data %>%
+  group_by(homestead_status) %>%
+  summarise(
+    `Foreclosure rate (%)`         = mean(foreclosure_1_yes_0_no, na.rm = TRUE) * 100,
+    `Redemption rate (%)`          = mean(redemption_1_yes_0_no, na.rm = TRUE) * 100,
+    `Mean taxable value ($)`       = mean(taxable_value, na.rm = TRUE),
+    `Mean forfeited balance ($)`   = mean(total_forfeited_balance, na.rm = TRUE),
+    `Percent unpaid utilities (%)` =
+      mean(
+        liens_or_unpaid_utilities_1_has_liens_unpaid_utilities_0_does_not_have_liens_unpaid_utilities,
+        na.rm = TRUE
+      ) * 100,
+    .groups = "drop"
+  )
+
+table2 <- t2_raw %>%
+  pivot_longer(
+    cols      = -homestead_status,
+    names_to  = "Measure",
+    values_to = "Value"
+  ) %>%
+  mutate(
+    Value = case_when(
+      str_detect(Measure, "%") ~ round(Value, 1),
+      TRUE                     ~ round(Value, 0)
+    ),
+    Status = as.character(homestead_status)
+  ) %>%
+  select(Measure, Status, Value) %>%
+  pivot_wider(
+    names_from  = Status,
+    values_from = Value
+  )
+
+kable(
+  table2,
+  caption  = "Outcomes and characteristics by homestead status",
+  booktabs = TRUE,
+  align    = c("l","r","r")
+) %>%
+  kable_styling(
+    full_width    = FALSE,
+    position      = "center",
+    font_size     = 9,
+    latex_options = c("hold_position")
+  )
+```
+
+```{r fig1_ts, fig.cap="Foreclosure rate over time, 2011–2024"}
+data %>%
+  group_by(forfeiture_year) %>%
+  summarise(
+    foreclosure_rate = mean(foreclosure_1_yes_0_no, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  ggplot(aes(x = forfeiture_year, y = foreclosure_rate)) +
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(breaks = 2011:2024) +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  labs(
+    x = "Forfeiture year",
+    y = "Foreclosure rate"
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+```{r fig2_utilities, fig.cap="Percent of parcels with unpaid utilities, by homestead status"}
+data %>%
+  group_by(homestead_status_label) %>%
+  summarise(
+    utilities_rate =
+      mean(
+        liens_or_unpaid_utilities_1_has_liens_unpaid_utilities_0_does_not_have_liens_unpaid_utilities,
+        na.rm = TRUE
+      ),
+    .groups = "drop"
+  ) %>%
+  ggplot(aes(x = homestead_status_label,
+             y = utilities_rate,
+             fill = homestead_status_label)) +
+  geom_col() +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  scale_fill_manual(values = c("Non-\nhomestead" = "#F8766D",
+                               "Homestead"       = "#00BFC4")) +
+  labs(
+    x = "Status",
+    y = "Percent with unpaid utilities",
+    fill = "Status"
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+```{r fig3_taxable, fig.cap="Taxable value by homestead status (log scale)"}
+data %>%
+  filter(taxable_value > 0) %>%
+  ggplot(aes(x = homestead_status_label,
+             y = taxable_value,
+             fill = homestead_status_label)) +
+  geom_boxplot(outlier.alpha = 0.2) +
+  scale_y_log10(labels = dollar_format()) +
+  scale_fill_manual(values = c("Non-\nhomestead" = "#F8766D",
+                               "Homestead"       = "#00BFC4")) +
+  labs(
+    x = "Status",
+    y = "Taxable value (log scale)",
+    fill = "Status"
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+Overall, the tables and figures paint a consistent picture of declining foreclosure rates over time and unequal risks across different types of properties. The time-series pattern in Figure 1 highlights the success of recent efforts to reduce tax foreclosures, while Figures 2 and 3 and Table 2 emphasize that non-homestead parcels carry a disproportionate share of foreclosure risk, unpaid utilities, and financial distress. These descriptive statistics suggest that policies aimed at early intervention and support for the most vulnerable property type,especially non-homestead parcels with low taxable values and high delinquent balances may be particularly important for reducing housing instability and inequality in Kalamazoo County.
+
+# Regression Specification and Estimation Strategy
+
+
+## Data Processing and Variable Construction
+
+This section describes how the Kalamazoo County forfeiture dataset is prepared for the regression analysis. The original file contains forfeiture records from 2011 to 2025. Because foreclosure always occurs one year after forfeiture, parcels forfeited in 2025 do not yet have a foreclosure outcome. Including them would mix observations with known outcomes and observations with missing outcomes. To avoid this problem, all parcels forfeited in 2025 are removed from the dataset.
+
+After filtering the data, I construct the main variables used in the regression models. The dependent variable is a foreclosure indicator that equals one if the parcel is foreclosed in the year following forfeiture and zero otherwise. The key explanatory variables include non-homestead status, taxable value, the total forfeited balance, unpaid utilities, and the number of prior forfeitures. These variables represent different dimensions of ownership type, property value, and financial pressure on the parcel. In addition, I create year fixed effects to account for changes in policy, economic conditions, or county level practices over time. These steps ensure that the dataset is consistent and ready for econometric analysis.
+
+## Econometric Results
+
+This section examines which property characteristics are associated with a higher probability of tax foreclosure in Kalamazoo County. The dependent variable in all models is a foreclosure indicator that equals one if the parcel is foreclosed and zero otherwise. Guided by  the descriptive patterns, the analysis focuses on five explanatory variables: non-homestead status, taxable value, total forfeited balance, unpaid utilities, and the number of prior forfeitures. These variables capture differences in ownership, financial stress, and property characteristics that may influence whether a parcel moves from forfeiture to foreclosure.
+
+All models include year fixed effects to control for changes in economic conditions or policies that affect foreclosure risk over time. By comparing results from the linear probability model and the logistic model with marginal effects, the analysis provides a consistent picture of how each factor contributes to foreclosure risk across the county.
+
+### Linear Probability Models (LPM)
+
+```{r lpm-models, results='asis'}
+# Run LPMs
+reg1a <- lm(foreclosure ~ non_homestead + year, data = kzoo)
+
+reg1b <- lm(foreclosure ~ non_homestead +
+              taxable_value_10k + forf_balance_1000 +
+              year,
+            data = kzoo)
+
+reg1c <- lm(foreclosure ~ non_homestead +
+              taxable_value_10k + forf_balance_1000 +
+              liens + num_prior +
+              year,
+            data = kzoo)
+
+lpm_list <- list("Model 1" = reg1a, "Model 2" = reg1b, "Model 3" = reg1c)
+
+# coefficient table
+lpm_tab <- lapply(names(lpm_list), function(mname) {
+  tidy(lpm_list[[mname]]) %>%
+    mutate(Model = mname)
+}) %>%
+  bind_rows() %>%
+  filter(term != "(Intercept)", !grepl("^year", term)) %>%
+  mutate(
+    Term = recode(term,
+      "non_homestead"     = "Non-homestead",
+      "taxable_value_10k" = "Taxable value (per $10,000)",
+      "forf_balance_1000" = "Forfeited balance (per $1,000)",
+      "liens"             = "Unpaid utilities",
+      "num_prior"         = "Prior forfeitures"
+    ),
+    est_se = sprintf("%.3f\n(%.3f)", estimate, std.error)
+  ) %>%
+  select(Term, Model, est_se) %>%
+  pivot_wider(names_from = Model, values_from = est_se)
+
+# R-squared and N rows
+lpm_fit <- lapply(names(lpm_list), function(mname) {
+  glance(lpm_list[[mname]]) %>%
+    mutate(Model = mname)
+}) %>%
+  bind_rows() %>%
+  select(Model, r.squared, nobs)
+
+r2_row <- lpm_fit %>%
+  select(Model, value = r.squared) %>%
+  pivot_wider(names_from = Model, values_from = value) %>%
+  mutate(Term = "R-squared") %>%
+  select(Term, everything()) %>%
+  mutate(across(-Term, ~ sprintf("%.3f", .)))  # character
+
+n_row <- lpm_fit %>%
+  select(Model, value = nobs) %>%
+  pivot_wider(names_from = Model, values_from = value) %>%
+  mutate(Term = "N") %>%
+  select(Term, everything()) %>%
+  mutate(across(-Term, ~ as.character(.)))    # character
+
+lpm_tab_full <- bind_rows(lpm_tab, r2_row, n_row)
+
+kable(lpm_tab_full, "latex", booktabs = TRUE,
+      caption = "Linear Probability Models of Foreclosure") %>%
+  kable_styling(latex_options = c("hold_position"))
+```
+
+Note: In the linear probability model, coefficients represent marginal effects, the change in foreclosure probability (in percentage points) from a one unit increase in each variable. Standard errors appear in parentheses. 
+
+Across all three models, non-homestead parcels are consistently more likely to foreclose than homestead parcels. In the full model (Model 3), non-homestead status increases foreclosure probability by about 2.8 percentage points, holding property value, financial stress indicators, and year constant. This shows that rental and investment properties face higher foreclosure risk. Higher taxable value is associated with a lower foreclosure probability. Specifically, a $10,000 increase in taxable value reduces foreclosure probability by around 0.6 percentage points. Although this may appear small, it is meaningful given the low overall foreclosure rates and indicates that low-value properties are more vulnerable. Financial stress also plays a major role. An additional $1,000 in forfeited balance increases foreclosure probability by about 0.5 percentage points, while unpaid utilities (liens) increase foreclosure probability by roughly 5 percentage points. This shows that utility arrears are a strong early warning sign of broader financial difficulty.
+
+### Logistic Regression Models 
+
+```{r logit-models, results='asis'}
+# logistic regressions
+logit_full <- glm(foreclosure ~ non_homestead +
+                    taxable_value_10k + forf_balance_1000 +
+                    liens + num_prior + year,
+                  data = kzoo, family = binomial())
+
+kzoo_nonhom <- kzoo %>% filter(non_homestead == 1)
+kzoo_hom    <- kzoo %>% filter(non_homestead == 0)
+
+logit_nonhom <- glm(foreclosure ~ taxable_value_10k +
+                      forf_balance_1000 + liens + num_prior + year,
+                    data = kzoo_nonhom, family = binomial())
+
+logit_hom <- glm(foreclosure ~ taxable_value_10k +
+                   forf_balance_1000 + liens + num_prior + year,
+                 data = kzoo_hom, family = binomial())
+
+# marginal effects
+mfx_list <- list(
+  "Full sample"        = margins(logit_full),
+  "Non-homestead only" = margins(logit_nonhom),
+  "Homestead only"     = margins(logit_hom)
+)
+
+logit_mfx <- lapply(names(mfx_list), function(mname) {
+  tidy(mfx_list[[mname]]) %>%
+    mutate(Model = mname)
+}) %>%
+  bind_rows()
+
+logit_tab <- logit_mfx %>%
+  filter(!grepl("^year", term)) %>%
+  mutate(
+    Term = recode(term,
+      "non_homestead"     = "Non-homestead",
+      "taxable_value_10k" = "Taxable value (per $10,000)",
+      "forf_balance_1000" = "Forfeited balance (per $1,000)",
+      "liens"             = "Unpaid utilities",
+      "num_prior"         = "Prior forfeitures"
+    ),
+    mfx_se = sprintf("%.3f\n(%.3f)", estimate, std.error)
+  ) %>%
+  select(Term, Model, mfx_se) %>%
+  distinct() %>%
+  pivot_wider(names_from = Model, values_from = mfx_se)
+
+# McFadden pseudo R-squared and N rows
+logit_model_list <- list(
+  "Full sample"        = logit_full,
+  "Non-homestead only" = logit_nonhom,
+  "Homestead only"     = logit_hom
+)
+
+logit_fit <- lapply(names(logit_model_list), function(mname) {
+  g <- glance(logit_model_list[[mname]])
+  tibble(
+    Model = mname,
+    r2    = 1 - g$deviance / g$null.deviance,
+    nobs  = g$nobs
+  )
+}) %>%
+  bind_rows()
+
+r2_row_logit <- logit_fit %>%
+  select(Model, value = r2) %>%
+  pivot_wider(names_from = Model, values_from = value) %>%
+  mutate(Term = "McFadden Pseudo R-squared") %>%
+  select(Term, everything()) %>%
+  mutate(across(-Term, ~ sprintf("%.3f", .)))  # character
+
+n_row_logit <- logit_fit %>%
+  select(Model, value = nobs) %>%
+  pivot_wider(names_from = Model, values_from = value) %>%
+  mutate(Term = "N") %>%
+  select(Term, everything()) %>%
+  mutate(across(-Term, ~ as.character(.)))     # character
+
+logit_tab_full <- bind_rows(logit_tab, r2_row_logit, n_row_logit)
+
+kable(logit_tab_full, "latex", booktabs = TRUE,
+      caption = "Logistic regression marginal effects on foreclosure probability") %>%
+  kable_styling(latex_options = c("hold_position"))
+```
+
+Note: In the logistic regression models, the table reports average marginal effects. Each coefficient shows the change in the probability of foreclosure (in absolute percentage points) from a one-unit increase in the corresponding variable, holding other variables constant. Standard errors appear in parentheses.
+
+The logistic regression results confirm the same main patterns as the LPM. In the full sample, non-homestead parcels have a foreclosure probability that is about 1.3 percentage points higher than comparable homestead parcels. Higher taxable value reduces foreclosure risk; an additional \$10,000 in taxable value lowers the probability of foreclosure by about 2.7 percentage points. Financial stress variables have strong effects. A \$1,000 increase in forfeited balance raises foreclosure probability by about 0.8 percentage points, and parcels with unpaid utilities face an increase of 3.7 percentage points in foreclosure probability compared with those without unpaid utilities. When estimating the model separately for homestead and non-homestead parcels, unpaid utilities remain especially important. For homestead parcels, unpaid utilities increase foreclosure probability by 4.2 percentage points, while for non-homestead parcels the increase is 3.6 percentage points. These results show that financial stress, particularly unpaid utilities and higher delinquent balances—is a key mechanism behind foreclosure risk across property types.
+
+```{r predicted-probabilities-plot, fig.cap="Predicted Probability of Foreclosure by Year and Homestead Status"}
+years <- sort(unique(kzoo$year))
+status_levels <- c("Homestead", "Non-homestead")
+
+pred_data <- expand.grid(
+  year = years,
+  homestead_status_label = status_levels
+) %>%
+  mutate(
+    non_homestead     = if_else(homestead_status_label == "Non-homestead", 1, 0),
+    taxable_value_10k = mean(kzoo$taxable_value_10k),
+    forf_balance_1000 = mean(kzoo$forf_balance_1000),
+    liens             = mean(kzoo$liens),
+    num_prior         = mean(kzoo$num_prior)
+  )
+
+pred <- predict(reg1c, newdata = pred_data, se.fit = TRUE)
+
+pred_data <- pred_data %>%
+  mutate(
+    predicted_prob = pred$fit,
+    lower          = pred$fit - 1.96 * pred$se.fit,
+    upper          = pred$fit + 1.96 * pred$se.fit
+  )
+
+ggplot(pred_data,
+       aes(x = year,
+           y = predicted_prob,
+           color = homestead_status_label,
+           group = homestead_status_label)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper, fill = homestead_status_label),
+              alpha = 0.2, color = NA) +
+  geom_line(linewidth = 1.1) +
+  geom_point(size = 3) +
+  labs(
+    x = "Forfeiture Year",
+    y = "Predicted Probability",
+    color = "Status",
+    fill  = "Status"
+  ) +
+  theme_minimal()
+```
+
+Figure 4 shows that predicted foreclosure probabilities decline over time for both homestead and non-homestead parcels, which is consistent with county efforts to reduce foreclosure. However, non-homestead parcels consistently exhibit higher predicted probabilities in every year. Even after controlling for taxable value, forfeited balance, unpaid utilities, and prior forfeitures, gap remains strong and persistent. This suggests a structural difference in foreclosure risk based on ownership type.
+
+## Conclusion
+
+The results of both the linear probability model and the logistic regression model show a clear and consistent pattern, the foreclosure risk in Kalamazoo County is not random. It is higher for non-homestead parcels, for parcels with lower taxable values, for parcels with larger delinquent balances, and for parcels with unpaid utilities. These findings appear across descriptive statistics and both regression approaches, which makes the results strong and reliable.
+
+Financial stress is one of the strongest predictors of foreclosure. A larger forfeited balance and unpaid utilities are both strongly associated with a higher probability of foreclosure. These results suggest that some parcels are already under severe financial pressure by the time they enter forfeiture. Non-homestead parcels also show consistently higher foreclosure risk, which may reflect differences in resources, incentives, and the ability to keep up with payment plans.
+
+Overall, the findings show that early identification of high risk parcels, especially non-homestead properties with low taxable values, large unpaid balances, or unpaid utilities may help reduce avoidable foreclosures. Targeted outreach, payment plans, and stronger support for owners of vulnerable parcels could reduce housing instability and improve outcomes for both property owners and the broader community.
+
+
+## References 
